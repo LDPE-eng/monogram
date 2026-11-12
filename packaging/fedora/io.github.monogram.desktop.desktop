@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Monogram
+GenericName=Messaging Client
+GenericName[ru]=Клиент обмена сообщениями
+Comment=Native Monogram desktop client (development version)
+Comment[ru]=Нативный настольный клиент Monogram (версия в разработке)
+Exec=monogram-desktop %u
+TryExec=monogram-desktop
+Icon=io.github.monogram.desktop
+Terminal=false
+Categories=Network;InstantMessaging;GTK;
+MimeType=x-scheme-handler/tg;
+Keywords=Messaging;Chat;Monogram;
+Keywords[ru]=Сообщения;Чат;Monogram;
+StartupNotify=true
+DBusActivatable=false

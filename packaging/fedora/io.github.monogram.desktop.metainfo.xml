@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.monogram.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only AND MIT AND MPL-2.0</project_license>
+  <name>Monogram</name>
+  <summary>Native Monogram desktop client in development</summary>
+  <summary xml:lang="ru">Нативный настольный клиент Monogram в разработке</summary>
+  <description>
+    <p>Monogram Desktop is a native Rust, GTK4 and libadwaita application for the Monogram project. The desktop port is under active development and does not yet provide feature parity with the Android client.</p>
+    <p xml:lang="ru">Monogram Desktop — нативное приложение проекта Monogram на Rust, GTK4 и libadwaita. Настольная версия находится в активной разработке и пока не обладает всеми возможностями Android-клиента.</p>
+    <p>Telegram API credentials are not bundled. This application is not an official Telegram product.</p>
+    <p xml:lang="ru">Учётные данные Telegram API не включены. Это приложение не является официальным продуктом Telegram.</p>
+  </description>
+  <launchable type="desktop-id">io.github.monogram.desktop.desktop</launchable>
+  <icon type="stock">io.github.monogram.desktop</icon>
+  <developer id="io.github.monogram">
+    <name>Monogram contributors</name>
+  </developer>
+  <url type="homepage">https://github.com/monogram-android/monogram</url>
+  <url type="bugtracker">https://github.com/monogram-android/monogram/issues</url>
+  <provides>
+    <binary>monogram-desktop</binary>
+    <mediatype>x-scheme-handler/tg</mediatype>
+  </provides>
+  <categories>
+    <category>Network</category>
+    <category>InstantMessaging</category>
+  </categories>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-info">mild</content_attribute>
+    <content_attribute id="social-audio">intense</content_attribute>
+  </content_rating>
+  <releases>
+    <release version="0.4.3" date="2026-11-11" type="development">
+      <description>
+        <p>Initial native desktop development package; Android feature parity is not yet available.</p>
+        <p xml:lang="ru">Первый пакет разрабатываемой настольной версии; паритет с Android пока не достигнут.</p>
+      </description>
+    </release>
+  </releases>
+</component>

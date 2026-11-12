@@ -1,0 +1,39 @@
+[package]
+name = "monogram-desktop"
+version = "0.4.3"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-only"
+publish = false
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+relm4 = { version = "0.11", default-features = false, features = ["macros", "libadwaita", "gnome_47"] }
+rusqlite = { version = "0.42", default-features = false }
+xdg = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+rand = { version = "0.10", default-features = false, features = ["sys_rng"] }
+zeroize = "1"
+keyring = { version = "4.2", default-features = false, features = ["v1", "zbus-secret-service-keyring-store"] }
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-video = "0.25"
+mpris-server = "0.11"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+base64 = "0.22"
+authenticator = { version = "0.5", default-features = false, features = ["crypto_rust"] }
+serde_cbor = "0.11"
+mono-proto-client = { path = "../vendor/mono-rs/crates/mono-proto-client" }
+mono-proto-storage = { path = "../vendor/mono-rs/crates/mono-proto-storage" }
+monogram-markup = { path = "../native/markup-rs" }
+tlottie = { path = "../vendor/tlottie" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+codegen-units = 1

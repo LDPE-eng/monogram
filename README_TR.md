@@ -135,10 +135,69 @@ Normal derlemenin parçası olarak Gradle, Rust kitaplıklarını `armeabi-v7a`,
 
 Windows'ta `./gradlew` yerine `./gradlew.bat` kullanın. `-PskipNativeBuild=true` seçeneğini yalnızca uyumlu yerel kitaplıklar ve üretilmiş bağlar zaten mevcutken, sadece Kotlin değişiklikleri için kullanın. Hem yerel derlemeyi hem de bağların yeniden üretilmesini atlar; SDK/NDK yapılandırması yine gereklidir.
 
+## Fedora için yerel masaüstü (geliştirme aşamasında)
+
+`desktop/`, Fedora 44 için Rust, Relm4, GTK4 ve libadwaita ile geliştirilen ayrı bir yerel uygulamadır. Sabitlenmiş mono-rs kaynaklarını, ortak Rust işaretleme crate'ini ve tlottie'yi doğrudan kullanır; JVM, Android SDK/NDK, Gradle veya Kotlin bridge gerekmez. Tek hesaplı depolama kullanan bir geliştirme sürümüdür; tam özellikli bir Android alternatifi veya doğrulanmış bir Fedora sürümü değildir.
+
+Modül; API yapılandırması ve mevcut hesaba giriş (telefon/kod, 2FA, QR ve istemci katmanında passkey), önbelleğe alınan ve canlı sohbet/geçmiş görünümleri, klasörler, arama ve profiller; metin/medya/özel mesajlar, taslaklar, zamanlama, yanıtlar/konular, tepkiler, anketler, kontrol listeleri ve satır içi botlar; indirme, yükleme, önbellek/ağ ilkeleri, GStreamer oynatma, çıkartmalar, MPRIS ve bildirimler; proxy'ler ve cihaz oturumları; görünüm/yerelleştirme tercihleri; tanılama, TDLib yetkilendirme içe aktarma ve PackageKit güncelleme denetimi uygular. Ayrıntılı işlev listesi ve platform davranışı için [desktop/README.md](desktop/README.md) dosyasına bakın.
+
+Önemli sınırlar devam ediyor: yeni hesap kaydı veya çoklu hesap desteği yok; passkey'ler etkileşimli PIN girişi olmadan CTAP2 USB HID kullanır; VP9 alfa WebM çıkartmaları statik küçük resme döner; codec'ler kurulu GStreamer eklentilerine bağlıdır; davet/paylaşım derin bağlantıları ve bildirimlerde satır içi yanıt desteklenmez; TDLib içe aktarma yalnızca yetkilendirmeyi taşır; PackageKit yalnızca sistem depolarını denetler ve GNOME Software'i açar, uygulamayı kendisi güncellemez. Çevrimdışı testler canlı Telegram'ı, GUI iş akışlarını, donanım doğrulayıcılarını, sistem hizmetlerini veya kurulu RPM'i doğrulamaz.
+
+### Fedora bağımlılıkları, kontroller ve derleme
+
+Aşağıdaki derleme araçlarını ve kitaplıklarını yalnızca makine sahibinin izniyle kurun. Rust, `desktop/Cargo.toml` gereksinimini karşılamalıdır (şu anda 1.99 veya üzeri); rustup kurulumu ve çalışma zamanı hizmetleri için [desktop/README.md](desktop/README.md) dosyasına bakın.
+
+```sh
+sudo dnf install git curl ca-certificates tar gzip findutils util-linux \
+  gcc gcc-c++ make cmake pkgconf-pkg-config python3 \
+  gtk4-devel libadwaita-devel libsecret-devel sqlite-devel \
+  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good \
+  systemd-devel rpm-build redhat-rpm-config desktop-file-utils appstream \
+  /usr/bin/kwin_wayland /usr/bin/dbus-run-session
+
+git submodule update --init --recursive
+cd desktop
+cargo fmt --package monogram-desktop -- --check
+cargo check --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+bash ../packaging/fedora/run-headless-tests.sh \
+  cargo test --workspace --all-targets --locked
+python3 tools/test_localization.py
+cargo build --release --locked
+cd ..
+desktop-file-validate packaging/fedora/io.github.monogram.desktop.desktop
+appstreamcli validate --no-net --strict \
+  packaging/fedora/io.github.monogram.desktop.metainfo.xml
+```
+
+Yerel uygulamayı `./desktop/target/release/monogram-desktop` ile çalıştırın. GUI kontrollerinde tek kullanımlık XDG dizinleri ve yalıtılmış bir D-Bus/Secret Service oturumu kullanın; test paketinde asla gerçek hesap kullanmayın.
+
+### Masaüstü API kimlik bilgileri
+
+Kendi kimlik bilgilerinizi [my.telegram.org/apps](https://my.telegram.org/apps) adresinden alın. Normal kurulum arayüzü, API ID/API hash ve oturum şifreleme anahtarını Secret Service (GNOME Keyring veya uyumlu KWallet) ile saklar ve plaintext fallback kullanmaz. Kontrollü geliştirme için `SECRETS`, `API_ID=...` ve `API_HASH=...` içeren `0600` izinli bir dosyayı gösterebilir; satır içi içerik de kabul edilir ancak önerilmez. Bu override, kayıtlı API kimlik bilgilerinden önce gelir ve onları Secret Service'e aktarmaz; oturum anahtarı yine Secret Service gerektirir. Gerçek kimlik bilgilerini asla kaynak koda, komutlara, günlüklere, issue'lara, CI'a veya RPM metadata'sına eklemeyin.
+
+### Yerel RPM derlemesi
+
+rustup Cargo'su `PATH` içindeyken depo kökünden çalıştırın:
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+rpm_topdir=$(mktemp -d "${TMPDIR:-/tmp}/monogram-rpmbuild.XXXXXXXX")
+bash packaging/fedora/prepare-sources.sh "$rpm_topdir"
+rpmbuild -ba --without system_rust \
+  --define "_topdir $rpm_topdir" --define '_smp_build_ncpus 2' \
+  "$rpm_topdir/SPECS/monogram-desktop.spec"
+rpm -qpl "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+rpm -qp --requires "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+```
+
+Hazırlama adımı kilitli Cargo bağımlılıklarını vendor arşivine alır; RPM derleme/kontrol aşamaları bunları çevrimdışı kullanır. Bu komutlar paketi kurmaz veya Telegram'a bağlanmaz. İkili RPM ve SRPM `$rpm_topdir` altında kalır; bu, resmi Fedora deposu paketi değil yerel paketlemedir. Kurulum, tekrar üretilebilirlik, GUI ve canlı giriş, herhangi bir sürüm iddiasından önce ayrıca doğrulanmalıdır.
+
 ## Teknolojiler
 
 - **Diller ve protokol:** Kotlin, Rust, MTProto, UniFFI
-- **Arayüz ve durum:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **Android arayüzü ve durum:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **Masaüstü:** Rust, Relm4, GTK4, libadwaita, SQLite, Secret Service, GStreamer, MPRIS
 - **Ortak hizmetler:** Koin, Coroutines, Flow, Room
 - **Medya ve bildirimler:** Media3, Coil, libvpx, tlottie, Firebase Cloud Messaging, UnifiedPush
 
@@ -155,9 +214,11 @@ Windows'ta `./gradlew` yerine `./gradlew.bat` kullanın. `-PskipNativeBuild=true
 | `native/markup-rs` | Rust ile Markdown, sözdizimi vurgulama ve matematik ayrıştırma |
 | `native/mtproto`, `native/markup` | Kotlin arayüz katmanları, üretilmiş bağlar ve yerel kitaplıklar |
 | `native/vpx` | Video çıkartmaları için önceden derlenmiş VP9 çözücü |
+| `desktop` | Yerel Fedora uygulaması, Cargo testleri ve Fluent yerelleştirmeleri |
+| `packaging/fedora` | Desktop/AppStream metadata'sı, simge, RPM spec ve çevrimdışı kaynak hazırlama |
 | `vendor` | Üçüncü taraf kaynak kodları ve alt modüller |
 
-Feature modülleri `network/bridge` üzerinden çağrı yapar; yerel protokol mantığı Rust'tadır. Feature modülleri üretilmiş UniFFI türlerini içe aktarmamalı veya birbirine bağımlı olmamalıdır. Geliştirme kuralları ve protokol değişmezleri için [AGENTS.md](AGENTS.md) dosyasına bakın.
+Android feature modülleri `network/bridge` üzerinden çağrı yapar; yerel protokol mantığı Rust'tadır. Feature modülleri üretilmiş UniFFI türlerini içe aktarmamalı veya birbirine bağımlı olmamalıdır. Masaüstü, mono-rs'yi doğrudan çağırır ve Kotlin bridge kullanmaz. Geliştirme kuralları ve protokol değişmezleri için [AGENTS.md](AGENTS.md) dosyasına bakın.
 
 ## Katkıda bulunma
 

@@ -135,10 +135,69 @@ Windows (PowerShell):
 
 Windows پر `./gradlew` کی جگہ `./gradlew.bat` استعمال کریں۔ `-PskipNativeBuild=true` صرف Kotlin کی تبدیلیوں کے لیے استعمال کریں جب موافق مقامی لائبریریاں اور تیار شدہ bindings پہلے سے موجود ہوں۔ یہ مقامی کمپائلیشن اور bindings کی دوبارہ تیاری دونوں چھوڑ دیتا ہے؛ SDK/NDK کی ترتیب پھر بھی ضروری ہے۔
 
+## Fedora کے لیے نیٹو ڈیسک ٹاپ (ترقیاتی مرحلہ)
+
+`desktop/`، Fedora 44 کے لیے Rust، Relm4، GTK4 اور libadwaita میں بنایا گیا ایک الگ نیٹو ایپلیکیشن ہے۔ یہ مقررہ mono-rs سورس، مشترکہ Rust markup crate اور tlottie براہِ راست استعمال کرتا ہے؛ JVM، Android SDK/NDK، Gradle یا Kotlin bridge کی ضرورت نہیں۔ یہ single-account ذخیرے والا ترقیاتی ورژن ہے، مکمل Android متبادل یا تصدیق شدہ Fedora ریلیز نہیں۔
+
+ماڈیول میں API کنفیگریشن اور موجودہ اکاؤنٹ میں لاگ اِن (فون/کوڈ، 2FA، QR اور کلائنٹ لیئر passkeys)؛ کیش شدہ اور live چیٹ/ہسٹری، فولڈرز، تلاش اور پروفائلز؛ ٹیکسٹ/میڈیا/خصوصی پیغامات، مسودے، شیڈولنگ، جوابات/موضوعات، ردعمل، پولز، checklists اور inline bots؛ ڈاؤن لوڈ، اپ لوڈ، کیش/نیٹ ورک پالیسیاں، GStreamer playback، اسٹیکرز، MPRIS اور اطلاعات؛ proxies اور ڈیوائس سیشنز؛ ظاہری شکل اور لوکلائزیشن کی ترجیحات؛ diagnostics، TDLib authorization import اور PackageKit update checks موجود ہیں۔ تفصیلی فہرست اور platform رویے کے لیے [desktop/README.md](desktop/README.md) دیکھیں۔
+
+اہم حدود باقی ہیں: نئے اکاؤنٹ کی رجسٹریشن یا multi-account سہولت نہیں؛ passkeys میں interactive PIN کے بغیر CTAP2 USB HID استعمال ہوتا ہے؛ VP9 alpha WebM اسٹیکرز static thumbnail پر واپس جاتے ہیں؛ codecs نصب GStreamer plugins پر منحصر ہیں؛ invite/share deep links اور notifications میں inline reply دستیاب نہیں؛ TDLib import صرف authorization منتقل کرتا ہے؛ PackageKit صرف system repositories جانچتا اور GNOME Software کھولتا ہے، ایپ خود اپ ڈیٹ نہیں کرتا۔ Offline tests حقیقی Telegram، GUI workflows، hardware authenticators، system services یا نصب RPM کی تصدیق نہیں کرتے۔
+
+### Fedora dependencies، checks اور build
+
+درج ذیل build tools اور libraries صرف مشین کے مالک کی اجازت سے انسٹال کریں۔ Rust کو `desktop/Cargo.toml` کی شرط (فی الحال 1.99 یا جدید تر) پوری کرنی ہوگی؛ rustup setup اور runtime services کے لیے [desktop/README.md](desktop/README.md) دیکھیں۔
+
+```sh
+sudo dnf install git curl ca-certificates tar gzip findutils util-linux \
+  gcc gcc-c++ make cmake pkgconf-pkg-config python3 \
+  gtk4-devel libadwaita-devel libsecret-devel sqlite-devel \
+  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good \
+  systemd-devel rpm-build redhat-rpm-config desktop-file-utils appstream \
+  /usr/bin/kwin_wayland /usr/bin/dbus-run-session
+
+git submodule update --init --recursive
+cd desktop
+cargo fmt --package monogram-desktop -- --check
+cargo check --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+bash ../packaging/fedora/run-headless-tests.sh \
+  cargo test --workspace --all-targets --locked
+python3 tools/test_localization.py
+cargo build --release --locked
+cd ..
+desktop-file-validate packaging/fedora/io.github.monogram.desktop.desktop
+appstreamcli validate --no-net --strict \
+  packaging/fedora/io.github.monogram.desktop.metainfo.xml
+```
+
+مقامی ایپ `./desktop/target/release/monogram-desktop` سے چلائیں۔ GUI checks کے لیے عارضی XDG directories اور الگ D-Bus/Secret Service session استعمال کریں؛ test suite میں کبھی حقیقی اکاؤنٹس استعمال نہ کریں۔
+
+### ڈیسک ٹاپ API اسناد
+
+اپنی اسناد [my.telegram.org/apps](https://my.telegram.org/apps) سے حاصل کریں۔ عام setup UI، API ID/API hash اور session encryption key کو Secret Service (GNOME Keyring یا موافق KWallet) میں محفوظ کرتا ہے اور plaintext fallback استعمال نہیں کرتا۔ کنٹرول شدہ ترقی کے لیے `SECRETS` کسی `0600` والی فائل کی طرف اشارہ کر سکتا ہے جس میں `API_ID=...` اور `API_HASH=...` ہوں؛ inline contents بھی قبول ہیں مگر تجویز نہیں۔ یہ override محفوظ API اسناد پر اولیت رکھتا ہے اور انہیں Secret Service میں منتقل نہیں کرتا، جبکہ session key کے لیے پھر بھی Secret Service ضروری ہے۔ حقیقی اسناد کبھی source، commands، logs، issues، CI یا RPM metadata میں شامل نہ کریں۔
+
+### مقامی RPM build
+
+rustup کا Cargo `PATH` میں رکھ کر repository root سے چلائیں:
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+rpm_topdir=$(mktemp -d "${TMPDIR:-/tmp}/monogram-rpmbuild.XXXXXXXX")
+bash packaging/fedora/prepare-sources.sh "$rpm_topdir"
+rpmbuild -ba --without system_rust \
+  --define "_topdir $rpm_topdir" --define '_smp_build_ncpus 2' \
+  "$rpm_topdir/SPECS/monogram-desktop.spec"
+rpm -qpl "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+rpm -qp --requires "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+```
+
+تیاری کا مرحلہ locked Cargo dependencies کو vendor کرتا ہے؛ RPM build/check مراحل انہیں offline استعمال کرتے ہیں۔ یہ commands پیکج انسٹال نہیں کرتیں اور Telegram سے رابطہ نہیں کرتیں۔ Binary RPM اور SRPM `$rpm_topdir` میں رہتے ہیں؛ یہ سرکاری Fedora repository package نہیں بلکہ مقامی packaging ہے۔ ریلیز کا دعویٰ کرنے سے پہلے installation، reproducibility، GUI اور live login کی الگ تصدیق ضروری ہے۔
+
 ## ٹیکنالوجیز
 
 - **زبانیں اور پروٹوکول:** Kotlin, Rust, MTProto, UniFFI
-- **انٹرفیس اور اسٹیٹ:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **Android انٹرفیس اور اسٹیٹ:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **ڈیسک ٹاپ:** Rust, Relm4, GTK4, libadwaita, SQLite, Secret Service, GStreamer, MPRIS
 - **مشترکہ سروسز:** Koin, Coroutines, Flow, Room
 - **میڈیا اور پش:** Media3, Coil, libvpx, tlottie, Firebase Cloud Messaging, UnifiedPush
 
@@ -155,9 +214,11 @@ Windows پر `./gradlew` کی جگہ `./gradlew.bat` استعمال کریں۔ `
 | `native/markup-rs` | Rust میں Markdown، syntax highlighting اور ریاضیاتی فارمولوں کی parsing |
 | `native/mtproto`, `native/markup` | Kotlin facades، تیار شدہ bindings اور مقامی لائبریریاں |
 | `native/vpx` | ویڈیو اسٹیکرز کے لیے پہلے سے کمپائل شدہ VP9 decoder |
+| `desktop` | Fedora نیٹو ایپلیکیشن، Cargo tests اور Fluent لوکلائزیشنز |
+| `packaging/fedora` | Desktop/AppStream metadata، آئیکن، RPM spec اور offline source preparation |
 | `vendor` | تیسرے فریق کا سورس اور submodules |
 
-Feature ماڈیولز `network/bridge` کو کال کرتے ہیں؛ مقامی پروٹوکول کی منطق Rust میں ہے۔ Feature ماڈیولز کو تیار شدہ UniFFI types درآمد نہیں کرنے چاہییں اور نہ ہی دوسرے feature ماڈیولز پر منحصر ہونا چاہیے۔ ترقیاتی اصولوں اور پروٹوکول کے لازمی قواعد کے لیے [AGENTS.md](AGENTS.md) دیکھیں۔
+Android feature ماڈیولز `network/bridge` کو کال کرتے ہیں؛ مقامی پروٹوکول کی منطق Rust میں ہے۔ Feature ماڈیولز کو تیار شدہ UniFFI types درآمد نہیں کرنے چاہییں اور نہ ہی دوسرے feature ماڈیولز پر منحصر ہونا چاہیے۔ ڈیسک ٹاپ mono-rs کو براہِ راست کال کرتا ہے اور Kotlin bridge استعمال نہیں کرتا۔ ترقیاتی اصولوں اور پروٹوکول کے لازمی قواعد کے لیے [AGENTS.md](AGENTS.md) دیکھیں۔
 
 ## تعاون
 

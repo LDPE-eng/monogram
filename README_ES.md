@@ -135,10 +135,69 @@ Durante la compilación normal, Gradle compila las bibliotecas Rust para `armeab
 
 En Windows, sustituye `./gradlew` por `./gradlew.bat`. Usa `-PskipNativeBuild=true` solo para cambios exclusivos de Kotlin cuando ya existan bibliotecas nativas y enlaces generados compatibles. Omite tanto la compilación nativa como la regeneración de enlaces; la configuración SDK/NDK sigue siendo necesaria.
 
+## Escritorio nativo para Fedora (en desarrollo)
+
+`desktop/` es una aplicación nativa independiente escrita en Rust, Relm4, GTK4 y libadwaita para Fedora 44. Utiliza directamente las fuentes fijadas de mono-rs, el crate Rust compartido de marcado y tlottie; no necesita JVM, Android SDK/NDK, Gradle ni el puente Kotlin. Es una versión en desarrollo con almacenamiento para una sola cuenta, no un sustituto completo del cliente Android ni una versión verificada para Fedora.
+
+El módulo implementa configuración de API e inicio de sesión en cuentas existentes (teléfono/código, 2FA, QR y passkeys en la capa de cliente); chats e historiales en caché y en vivo, carpetas, búsqueda y perfiles; mensajes de texto, multimedia y especiales, borradores, programación, respuestas/temas, reacciones, encuestas, listas de tareas y bots inline; descargas, subidas, políticas de caché y red, reproducción con GStreamer, stickers, MPRIS y notificaciones; proxies y sesiones de dispositivos; apariencia y localización; diagnóstico, importación de autorización de TDLib y comprobación de actualizaciones con PackageKit. Consulta [desktop/README.md](desktop/README.md) para el inventario detallado de funciones y el comportamiento de la plataforma.
+
+Persisten límites importantes: no hay registro de cuentas nuevas ni soporte multicuenta; las passkeys usan CTAP2 USB HID sin introducción interactiva de PIN; los stickers WebM VP9 con canal alfa muestran una miniatura estática; los códecs dependen de los plugins de GStreamer instalados; los enlaces de invitación/compartir y las respuestas inline en notificaciones no están disponibles; la importación de TDLib solo transfiere la autorización; PackageKit solo consulta los repositorios del sistema y abre GNOME Software, no actualiza la aplicación por sí mismo. Las pruebas offline no verifican Telegram en vivo, los flujos GUI, los autenticadores físicos, los servicios del sistema ni un RPM instalado.
+
+### Dependencias, comprobaciones y compilación en Fedora
+
+Instala las herramientas y bibliotecas siguientes solo con el consentimiento del propietario del equipo. Rust debe cumplir `desktop/Cargo.toml` (actualmente 1.99 o posterior); consulta [desktop/README.md](desktop/README.md) para configurar rustup y los servicios en tiempo de ejecución.
+
+```sh
+sudo dnf install git curl ca-certificates tar gzip findutils util-linux \
+  gcc gcc-c++ make cmake pkgconf-pkg-config python3 \
+  gtk4-devel libadwaita-devel libsecret-devel sqlite-devel \
+  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good \
+  systemd-devel rpm-build redhat-rpm-config desktop-file-utils appstream \
+  /usr/bin/kwin_wayland /usr/bin/dbus-run-session
+
+git submodule update --init --recursive
+cd desktop
+cargo fmt --package monogram-desktop -- --check
+cargo check --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+bash ../packaging/fedora/run-headless-tests.sh \
+  cargo test --workspace --all-targets --locked
+python3 tools/test_localization.py
+cargo build --release --locked
+cd ..
+desktop-file-validate packaging/fedora/io.github.monogram.desktop.desktop
+appstreamcli validate --no-net --strict \
+  packaging/fedora/io.github.monogram.desktop.metainfo.xml
+```
+
+Ejecuta la aplicación local con `./desktop/target/release/monogram-desktop`. Usa directorios XDG desechables y una sesión aislada de D-Bus/Secret Service para las comprobaciones GUI; nunca uses cuentas reales en el conjunto de pruebas.
+
+### Credenciales de API para escritorio
+
+Obtén tus propias credenciales en [my.telegram.org/apps](https://my.telegram.org/apps). La interfaz de configuración normal guarda el API ID/API hash y la clave de cifrado de sesión mediante Secret Service (GNOME Keyring o KWallet compatible), sin alternativa en texto plano. Para desarrollo controlado, `SECRETS` puede apuntar a un archivo con permisos `0600` que contenga `API_ID=...` y `API_HASH=...`; también se acepta contenido inline, pero no se recomienda. Esta sustitución tiene prioridad sobre las credenciales API guardadas y no las importa a Secret Service, mientras que la clave de sesión sigue necesitándolo. No incluyas nunca credenciales reales en el código, comandos, registros, incidencias, CI ni metadatos RPM.
+
+### Compilación local del RPM
+
+Desde la raíz del repositorio, con Cargo de rustup en `PATH`:
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+rpm_topdir=$(mktemp -d "${TMPDIR:-/tmp}/monogram-rpmbuild.XXXXXXXX")
+bash packaging/fedora/prepare-sources.sh "$rpm_topdir"
+rpmbuild -ba --without system_rust \
+  --define "_topdir $rpm_topdir" --define '_smp_build_ncpus 2' \
+  "$rpm_topdir/SPECS/monogram-desktop.spec"
+rpm -qpl "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+rpm -qp --requires "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+```
+
+El paso de preparación crea un vendor con las dependencias Cargo bloqueadas; las fases de compilación y comprobación del RPM las usan sin conexión. Estos comandos no instalan el paquete ni contactan con Telegram. El RPM binario y el SRPM quedan en `$rpm_topdir`; se trata de empaquetado local, no de un paquete del repositorio oficial de Fedora. La instalación, reproducibilidad, GUI e inicio de sesión en vivo requieren verificación independiente antes de afirmar que existe una versión publicable.
+
 ## Tecnologías
 
 - **Lenguajes y protocolo:** Kotlin, Rust, MTProto, UniFFI
-- **Interfaz y estado:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **Interfaz y estado de Android:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **Escritorio:** Rust, Relm4, GTK4, libadwaita, SQLite, Secret Service, GStreamer, MPRIS
 - **Servicios compartidos:** Koin, Coroutines, Flow, Room
 - **Multimedia y notificaciones:** Media3, Coil, libvpx, tlottie, Firebase Cloud Messaging, UnifiedPush
 
@@ -155,9 +214,11 @@ En Windows, sustituye `./gradlew` por `./gradlew.bat`. Usa `-PskipNativeBuild=tr
 | `native/markup-rs` | Procesamiento de Markdown, resaltado de sintaxis y fórmulas en Rust |
 | `native/mtproto`, `native/markup` | Fachadas Kotlin, enlaces generados y bibliotecas nativas |
 | `native/vpx` | Decodificador VP9 precompilado para stickers de vídeo |
+| `desktop` | Aplicación nativa para Fedora, pruebas Cargo y localizaciones Fluent |
+| `packaging/fedora` | Metadatos Desktop/AppStream, icono, spec RPM y preparación de fuentes offline |
 | `vendor` | Código de terceros y submódulos |
 
-Los módulos feature llaman a `network/bridge`; la lógica nativa del protocolo reside en Rust. No deben importar tipos UniFFI generados ni depender de otros módulos feature. Consulta [AGENTS.md](AGENTS.md) para las convenciones de desarrollo y las invariantes del protocolo.
+Los módulos feature de Android llaman a `network/bridge`; la lógica nativa del protocolo reside en Rust. No deben importar tipos UniFFI generados ni depender de otros módulos feature. Escritorio llama directamente a mono-rs y no utiliza el puente Kotlin. Consulta [AGENTS.md](AGENTS.md) para las convenciones de desarrollo y las invariantes del protocolo.
 
 ## Contribuir
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Monogram</title>
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="#3584e4"/>
+  <path d="M32 91V37h13l19 26 19-26h13v54H82V60L64 84 46 60v31Z" fill="#fff"/>
+</svg>

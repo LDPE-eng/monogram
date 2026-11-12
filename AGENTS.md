@@ -1,8 +1,10 @@
 # Monogram agent guide
 
-Monogram is an Android Telegram client. Kotlin and Jetpack Compose provide the
-application and UI; Rust with UniFFI provides the MTProto and markup clients.
-The minimum Android SDK is 24.
+Monogram is an Android Telegram client with a separate native Fedora desktop
+module. Android uses Kotlin and Jetpack Compose for the application and UI, and
+Rust with UniFFI for the MTProto and markup clients; its minimum SDK is 24.
+The desktop application uses Rust, Relm4, GTK4, and libadwaita, with mono-rs and
+the shared Rust markup crate through local path dependencies.
 
 ## Working rules
 
@@ -23,30 +25,43 @@ The minimum Android SDK is 24.
   contract, or a high-risk boundary. Prefer focused unit tests; use
   instrumentation tests only when the behavior requires Android rendering,
   lifecycle, storage, or interaction.
-- Keep Rust unit tests in each crate's `tests/unit` directory. Reference them
-  from the owning source module with `#[cfg(test)]` and `#[path = "..."]`
-  so private-module access stays intact; do not embed test modules in production
-  source files. Put integration tests in the crate's `tests` directory.
+- Follow the owning crate's Rust test layout. Native crates keep unit tests in
+  `tests/unit`; desktop uses `desktop/tests/unit`, with media unit tests under
+  `desktop/src/media/tests/unit`. Reference unit tests from the owning source
+  module with `#[cfg(test)]` and `#[path = "..."]` so private-module access
+  stays intact; do not embed test modules in production source files. Put
+  integration tests in the crate's `tests` directory.
 - Run checks proportional to the change and report exactly what was run. Do
-  not claim device or live Telegram verification without performing it.
+  not claim device, hardware, GUI, installed-package, or live Telegram
+  verification without performing it.
 
 ## Repository layout and boundaries
 
 | Path | Responsibility |
 | --- | --- |
-| `app` | Entry point, dependency injection, root navigation, push, crash screen |
-| `core/*` | Shared models, database, UI, markup access, and common utilities |
-| `feature/*` | Authentication, chats, dialogs, folders, profiles, and settings |
+| `app` | Android entry point, dependency injection, root navigation, push, crash screen |
+| `core/*` | Shared Android models, database, UI, markup access, and common utilities |
+| `feature/*` | Android authentication, chats, dialogs, folders, profiles, and settings |
 | `network/bridge` | Kotlin MTProto boundary, domain APIs, error mapping, DTOs |
 | `network/http` | HTTP media downloads, cache, and queue |
-| `native/mtproto-rs` | Rust MTProto client and UniFFI exports |
-| `native/markup-rs` | Rust Markdown, syntax highlighting, and math parser |
-| `vendor` | Third-party code and submodules; do not edit for app work |
+| `native/mtproto-rs` | Rust MTProto client and UniFFI exports for Android |
+| `native/markup-rs` | Shared Rust Markdown, syntax highlighting, and math parser |
+| `desktop` | Native Fedora Rust/Relm4/GTK4/libadwaita application, tests, and Fluent locales |
+| `packaging/fedora` | Desktop file, AppStream metadata, icon, RPM spec, and source preparation |
+| `vendor` | Third-party code and submodules; do not edit for app or desktop work |
 
-Dependencies flow from `app` to features, then to `core` and `network`.
+Android dependencies flow from `app` to features, then to `core` and `network`.
 Features must not depend on other features or import generated UniFFI types.
-Protocol calls go through `network/bridge`; protocol state and native logic
-belong in Rust.
+Android protocol calls go through `network/bridge`; protocol state and native
+logic belong in Rust.
+
+The desktop crate is a separate Cargo workspace rooted at `desktop/Cargo.toml`.
+It does not use Gradle, the Android SDK/NDK, Kotlin `network/bridge`, or UniFFI.
+It calls `mono-proto-client` directly and shares `native/markup-rs`; keep its
+GTK UI, worker/client boundary, storage, and platform integration within
+`desktop`. Do not make Android modules depend on desktop code. Initialize all
+submodules, including `vendor/mono-rs` and `vendor/tlottie`, but never edit
+`vendor` for application work.
 
 ## Kotlin and Compose
 
@@ -64,6 +79,26 @@ belong in Rust.
 - Keep navigation state in the navigation stack, not local composable state,
   when the state represents the selected screen or conversation.
 
+## Fedora desktop
+
+- Keep the application `#![forbid(unsafe_code)]`. Run blocking protocol,
+  Secret Service, PackageKit, and filesystem work off the GTK main context;
+  preserve request cancellation and do not touch GTK objects from workers.
+- Store API credentials, proxy secrets, and the session encryption key through
+  Secret Service. Never add a plaintext fallback. The `SECRETS` environment
+  variable is a development override for an API credentials file (or inline
+  contents); do not put real values in commands, tests, logs, or commits.
+- Use isolated XDG directories for GUI checks and never use live accounts in
+  the default test suite. The current session layout supports one account;
+  do not imply multi-account support or live feature parity.
+- Preserve the explicit hardware and media fallbacks: CTAP2 passkeys currently
+  use USB HID without interactive PIN entry, and VP9 alpha WebM stickers fall
+  back to a static thumbnail. PackageKit update checks are read-only; opening
+  GNOME Software is not an application-managed update.
+- Keep Fedora RPM packaging offline after `cargo vendor`, honor the Rust MSRV,
+  and validate the desktop/AppStream metadata. Building an RPM is not evidence
+  that installation, GUI behavior, hardware, or Telegram login was verified.
+
 ## Localization
 
 - Every new or changed user-visible string must be added to the base resource
@@ -74,6 +109,11 @@ belong in Rust.
 - Check both `core/ui/src/main/res/values*/strings.xml` and the relevant
   `feature/*/src/main/res/values*/strings.xml` files. Do not add translations
   to unrelated modules.
+- Desktop Fluent catalogs are generated from the pinned Android resources by
+  `desktop/tools/convert_locales.py`; desktop-only strings live in each
+  `desktop/locales/<locale>/desktop-extra.ftl`. Translate every desktop locale,
+  do not hand-edit generated `monogram.ftl` or `manifest.json`, and run the
+  converter plus localization contract tests after resource changes.
 - When a locale is not reasonably translatable from the available context,
   flag it explicitly instead of silently copying English. Keep locale files
   syntactically valid.
@@ -116,8 +156,32 @@ git diff --check
 
 Use `-PskipNativeBuild=true` only for Kotlin-only work when generated bindings
 and compatible native libraries are already available. Native changes require
-the appropriate native build and relevant Kotlin contract checks. Live Telegram
-credentials and device behavior are never part of the default test suite.
+the appropriate native build and relevant Kotlin contract checks.
+
+For Fedora desktop work, use its own workspace from the repository root:
+
+```console
+cd desktop
+cargo fmt --package monogram-desktop -- --check
+cargo check --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+bash ../packaging/fedora/run-headless-tests.sh \
+  cargo test --workspace --all-targets --locked
+python3 tools/test_localization.py
+cargo build --release --locked
+cd ..
+desktop-file-validate packaging/fedora/io.github.monogram.desktop.desktop
+appstreamcli validate --no-net --strict packaging/fedora/io.github.monogram.desktop.metainfo.xml
+git diff --check
+```
+
+Use `python3 desktop/tools/convert_locales.py --check` for a quick generated
+localization check. See `desktop/README.md` for Fedora dependencies and the
+`packaging/fedora/prepare-sources.sh` plus `rpmbuild -ba --without system_rust`
+flow. Live Telegram credentials, real accounts, hardware authenticators, manual
+GUI workflows, PackageKit services, and device behavior are never part of the
+default test suite; the wrapper only automates tests in an isolated headless
+Wayland/D-Bus session.
 
 ## Setup
 

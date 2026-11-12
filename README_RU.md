@@ -135,10 +135,69 @@ Windows (PowerShell):
 
 В Windows замените `./gradlew` на `./gradlew.bat`. Используйте `-PskipNativeBuild=true` только для изменений в Kotlin, когда уже есть совместимые нативные библиотеки и сгенерированные привязки. Параметр пропускает и нативную компиляцию, и генерацию привязок; настройка SDK/NDK всё равно обязательна.
 
+## Нативный desktop для Fedora (в разработке)
+
+`desktop/` — отдельное нативное приложение на Rust, Relm4, GTK4 и libadwaita для Fedora 44. Оно напрямую использует закреплённые исходники mono-rs, общий Rust-крейт разметки и tlottie; JVM, Android SDK/NDK, Gradle и Kotlin bridge не нужны. Это разрабатываемая версия с хранением одного аккаунта, а не полнофункциональная замена Android-клиента и не проверенный релиз Fedora.
+
+Модуль реализует настройку API и вход в существующий аккаунт (телефон/код, 2FA, QR и passkeys на клиентском слое); кэшированные и live-списки чатов и истории, папки, поиск и профили; текстовые, медийные и специальные сообщения, черновики, отложенную отправку, ответы/темы, реакции, опросы, checklists и inline-ботов; загрузки, отправку медиа, политики кэша и сети, воспроизведение GStreamer, стикеры, MPRIS и уведомления; прокси и сеансы устройств; внешний вид и локализацию; диагностику, импорт авторизации TDLib и проверку обновлений PackageKit. Полный перечень функций и поведение платформы описаны в [desktop/README.md](desktop/README.md).
+
+Сохраняются важные ограничения: нет регистрации нового аккаунта и multi-account; passkeys используют CTAP2 USB HID без интерактивного ввода PIN; VP9 alpha WebM-стикеры показывают статический thumbnail; кодеки зависят от установленных GStreamer plugins; invite/share deep links и inline-ответы в уведомлениях не поддерживаются; TDLib import переносит только авторизацию; PackageKit лишь проверяет системные репозитории и открывает GNOME Software, но не обновляет приложение сам. Offline-тесты не проверяют live Telegram, GUI-сценарии, аппаратные authenticator'ы, системные сервисы или установленный RPM.
+
+### Зависимости, проверки и сборка в Fedora
+
+Устанавливайте указанные инструменты и библиотеки только с согласия владельца машины. Rust должен соответствовать `desktop/Cargo.toml` (сейчас требуется 1.99 или новее); настройка rustup и runtime-сервисов описана в [desktop/README.md](desktop/README.md).
+
+```sh
+sudo dnf install git curl ca-certificates tar gzip findutils util-linux \
+  gcc gcc-c++ make cmake pkgconf-pkg-config python3 \
+  gtk4-devel libadwaita-devel libsecret-devel sqlite-devel \
+  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good \
+  systemd-devel rpm-build redhat-rpm-config desktop-file-utils appstream \
+  /usr/bin/kwin_wayland /usr/bin/dbus-run-session
+
+git submodule update --init --recursive
+cd desktop
+cargo fmt --package monogram-desktop -- --check
+cargo check --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+bash ../packaging/fedora/run-headless-tests.sh \
+  cargo test --workspace --all-targets --locked
+python3 tools/test_localization.py
+cargo build --release --locked
+cd ..
+desktop-file-validate packaging/fedora/io.github.monogram.desktop.desktop
+appstreamcli validate --no-net --strict \
+  packaging/fedora/io.github.monogram.desktop.metainfo.xml
+```
+
+Локальное приложение запускается командой `./desktop/target/release/monogram-desktop`. Для GUI-проверок используйте одноразовые XDG-каталоги и изолированную D-Bus/Secret Service-сессию, никогда не используйте реальные аккаунты в тестовом наборе.
+
+### API credentials для desktop
+
+Получите собственные credentials на [my.telegram.org/apps](https://my.telegram.org/apps). Обычный UI настройки сохраняет API ID/API hash и ключ шифрования сессии через Secret Service (GNOME Keyring или совместимый KWallet), без fallback в plaintext. Для контролируемой разработки `SECRETS` может указывать на файл с режимом `0600`, содержащий `API_ID=...` и `API_HASH=...`; inline-содержимое тоже поддерживается, но не рекомендуется. Этот override имеет приоритет над сохранёнными API credentials и не импортирует их в Secret Service, а ключ сессии по-прежнему требует его. Никогда не помещайте реальные credentials в исходники, команды, логи, issues, CI или RPM metadata.
+
+### Локальная сборка RPM
+
+Из корня репозитория, с Cargo из rustup в `PATH`:
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+rpm_topdir=$(mktemp -d "${TMPDIR:-/tmp}/monogram-rpmbuild.XXXXXXXX")
+bash packaging/fedora/prepare-sources.sh "$rpm_topdir"
+rpmbuild -ba --without system_rust \
+  --define "_topdir $rpm_topdir" --define '_smp_build_ncpus 2' \
+  "$rpm_topdir/SPECS/monogram-desktop.spec"
+rpm -qpl "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+rpm -qp --requires "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+```
+
+На этапе подготовки locked Cargo-зависимости помещаются в vendor-архив; стадии сборки и проверки RPM используют их offline. Эти команды не устанавливают пакет и не обращаются к Telegram. Бинарный RPM и SRPM остаются в `$rpm_topdir`; это локальная упаковка, а не пакет официального репозитория Fedora. Установка, воспроизводимость, GUI и live-вход требуют отдельной проверки до любого заявления о релизе.
+
 ## Технологии
 
 - **Языки и протокол:** Kotlin, Rust, MTProto, UniFFI
-- **Интерфейс и состояние:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **Android-интерфейс и состояние:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **Desktop:** Rust, Relm4, GTK4, libadwaita, SQLite, Secret Service, GStreamer, MPRIS
 - **Общие сервисы:** Koin, Coroutines, Flow, Room
 - **Медиа и уведомления:** Media3, Coil, libvpx, tlottie, Firebase Cloud Messaging, UnifiedPush
 
@@ -155,9 +214,11 @@ Windows (PowerShell):
 | `native/markup-rs` | Обработка Markdown, подсветки синтаксиса и формул на Rust |
 | `native/mtproto`, `native/markup` | Фасады Kotlin, сгенерированные привязки и нативные библиотеки |
 | `native/vpx` | Готовый декодер VP9 для видеостикеров |
+| `desktop` | Нативное Fedora-приложение, Cargo-тесты и Fluent-локализации |
+| `packaging/fedora` | Desktop/AppStream metadata, иконка, RPM spec и подготовка offline-исходников |
 | `vendor` | Сторонние исходники и подмодули |
 
-Модули feature обращаются к `network/bridge`; нативная протокольная логика находится в Rust. Модули feature не должны импортировать сгенерированные типы UniFFI или зависеть друг от друга. Правила разработки и протокольные инварианты описаны в [AGENTS.md](AGENTS.md).
+Android-модули feature обращаются к `network/bridge`; нативная протокольная логика находится в Rust. Модули feature не должны импортировать сгенерированные типы UniFFI или зависеть друг от друга. Desktop напрямую вызывает mono-rs и не использует Kotlin bridge. Правила разработки и протокольные инварианты описаны в [AGENTS.md](AGENTS.md).
 
 ## Участие в разработке
 

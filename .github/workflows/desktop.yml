@@ -1,0 +1,107 @@
+name: Fedora Desktop
+
+on:
+  push:
+    paths:
+      - 'desktop/**'
+      - 'packaging/fedora/**'
+      - 'native/markup-rs/**'
+      - 'vendor/mono-rs'
+      - 'vendor/tlottie'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'packaging/fedora/**'
+      - 'native/markup-rs/**'
+      - 'vendor/mono-rs'
+      - 'vendor/tlottie'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fedora:
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: 2
+      CARGO_INCREMENTAL: 0
+    steps:
+      - name: Install Fedora build tools
+        run: |
+          dnf -y install \
+            git curl ca-certificates tar gzip findutils util-linux python3 \
+            gcc gcc-c++ make cmake pkgconf-pkg-config \
+            gtk4-devel libadwaita-devel libsecret-devel sqlite-devel \
+            gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good \
+            systemd-devel rpm-build redhat-rpm-config desktop-file-utils appstream \
+            /usr/bin/kwin_wayland /usr/bin/dbus-run-session
+
+      - name: Checkout pinned sources and submodules
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Packaging regression tests
+        run: python3 packaging/fedora/test_packaging.py
+
+      - name: Install stable Rust with rustfmt and Clippy
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+            https://sh.rustup.rs -o /tmp/monogram-rustup-init.sh
+          sh /tmp/monogram-rustup-init.sh -y --no-modify-path --profile minimal \
+            --default-toolchain stable --component rustfmt --component clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Format
+        working-directory: desktop
+        run: cargo fmt --package monogram-desktop -- --check
+
+      - name: Clippy
+        working-directory: desktop
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: GTK, unit and integration tests (isolated Wayland and D-Bus)
+        working-directory: desktop
+        run: |
+          bash ../packaging/fedora/run-headless-tests.sh \
+            cargo test --workspace --all-targets --locked
+
+      - name: Release build
+        working-directory: desktop
+        run: cargo build --release --locked
+
+      - name: Validate desktop metadata
+        run: |
+          desktop-file-validate packaging/fedora/io.github.monogram.desktop.desktop
+          appstreamcli validate --no-net --strict \
+            packaging/fedora/io.github.monogram.desktop.metainfo.xml
+
+      - name: Prepare locked sources and build RPM offline
+        run: |
+          rpm_topdir="$RUNNER_TEMP/monogram-rpmbuild"
+          bash packaging/fedora/prepare-sources.sh "$rpm_topdir"
+          rpmbuild -ba --without system_rust \
+            --define "_topdir $rpm_topdir" --define '_smp_build_ncpus 2' \
+            "$rpm_topdir/SPECS/monogram-desktop.spec"
+          rpm -qpl "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+          rpm -qp --requires "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+
+      - name: Upload binary and source RPMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: monogram-desktop-fedora-44
+          path: |
+            ${{ runner.temp }}/monogram-rpmbuild/RPMS/**/*.rpm
+            ${{ runner.temp }}/monogram-rpmbuild/SRPMS/*.src.rpm
+          if-no-files-found: error

@@ -135,10 +135,69 @@ Gradle builds the Rust libraries for `armeabi-v7a`, `arm64-v8a`, and `x86_64` an
 
 On Windows, replace `./gradlew` with `./gradlew.bat`. Use `-PskipNativeBuild=true` only for Kotlin-only work when compatible native libraries and generated bindings already exist. It skips both native compilation and binding regeneration; SDK/NDK configuration is still required.
 
+## Fedora desktop (native, development)
+
+`desktop/` is a separate native Rust, Relm4, GTK4, and libadwaita application for Fedora 44. It uses the pinned mono-rs sources, the shared Rust markup crate, and tlottie directly; no JVM, Android SDK/NDK, Gradle, or Kotlin bridge is required. It is a development version with one-account storage, not a feature-complete Android replacement or a verified Fedora release.
+
+The module implements API configuration and existing-account authentication (phone/code, 2FA, QR, and client-layer passkeys); cached and live chat/history views, folders, search, and profiles; text/media/special messages, drafts, scheduling, replies/topics, reactions, polls, checklists, and inline bots; downloads, uploads, cache/network policies, GStreamer playback, stickers, MPRIS, and notifications; proxies and device sessions; appearance/localization preferences; diagnostics, TDLib authorization import, and PackageKit update checks. See [desktop/README.md](desktop/README.md) for the detailed feature inventory and platform behavior.
+
+Important limits remain: no new-account registration or multi-account support; passkeys use CTAP2 USB HID without interactive PIN support; VP9 alpha WebM stickers use a static thumbnail fallback; codecs depend on installed GStreamer plugins; invite/share deep links and inline notification replies are unsupported; TDLib import transfers authorization only; PackageKit only checks system repositories and opens GNOME Software rather than updating the app itself. Offline tests do not verify live Telegram behavior, GUI workflows, hardware authenticators, system services, or an installed RPM.
+
+### Fedora dependencies, checks, and build
+
+Install the build tools and libraries below only with the machine owner's consent. Rust must satisfy `desktop/Cargo.toml` (currently 1.99 or newer); see [desktop/README.md](desktop/README.md) for rustup setup and runtime services.
+
+```sh
+sudo dnf install git curl ca-certificates tar gzip findutils util-linux \
+  gcc gcc-c++ make cmake pkgconf-pkg-config python3 \
+  gtk4-devel libadwaita-devel libsecret-devel sqlite-devel \
+  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good \
+  systemd-devel rpm-build redhat-rpm-config desktop-file-utils appstream \
+  /usr/bin/kwin_wayland /usr/bin/dbus-run-session
+
+git submodule update --init --recursive
+cd desktop
+cargo fmt --package monogram-desktop -- --check
+cargo check --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+bash ../packaging/fedora/run-headless-tests.sh \
+  cargo test --workspace --all-targets --locked
+python3 tools/test_localization.py
+cargo build --release --locked
+cd ..
+desktop-file-validate packaging/fedora/io.github.monogram.desktop.desktop
+appstreamcli validate --no-net --strict \
+  packaging/fedora/io.github.monogram.desktop.metainfo.xml
+```
+
+Run the local application as `./desktop/target/release/monogram-desktop`. Use disposable XDG directories and an isolated D-Bus/Secret Service session for GUI checks, never real test-suite accounts.
+
+### Desktop API credentials
+
+Obtain your own credentials at [my.telegram.org/apps](https://my.telegram.org/apps). The normal setup UI stores API ID/API hash and the session encryption key through Secret Service (GNOME Keyring or compatible KWallet), with no plaintext fallback. For controlled development, `SECRETS` can point to a mode-`0600` file containing `API_ID=...` and `API_HASH=...`; inline contents are also accepted but discouraged. This override takes precedence over stored API credentials and does not import them into Secret Service, while the session key still requires it. Never place real credentials in source, commands, logs, issues, CI, or RPM metadata.
+
+### Local RPM build
+
+From the repository root, with rustup's Cargo on `PATH`:
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+rpm_topdir=$(mktemp -d "${TMPDIR:-/tmp}/monogram-rpmbuild.XXXXXXXX")
+bash packaging/fedora/prepare-sources.sh "$rpm_topdir"
+rpmbuild -ba --without system_rust \
+  --define "_topdir $rpm_topdir" --define '_smp_build_ncpus 2' \
+  "$rpm_topdir/SPECS/monogram-desktop.spec"
+rpm -qpl "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+rpm -qp --requires "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+```
+
+The preparation step vendors locked Cargo dependencies; the RPM build/check stages use them offline. These commands do not install the package or contact Telegram. Binary RPM and SRPM remain under `$rpm_topdir`; this is local packaging, not an official Fedora repository package. Installation, reproducibility, GUI behavior, and live login require separate verification before any release claim.
+
 ## Tech stack
 
 - **Languages and protocol:** Kotlin, Rust, MTProto, UniFFI
-- **UI and state:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **Android UI and state:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **Desktop:** Rust, Relm4, GTK4, libadwaita, SQLite, Secret Service, GStreamer, MPRIS
 - **Shared services:** Koin, Coroutines, Flow, Room
 - **Media and push:** Media3, Coil, libvpx, tlottie, Firebase Cloud Messaging, UnifiedPush
 
@@ -155,9 +214,11 @@ On Windows, replace `./gradlew` with `./gradlew.bat`. Use `-PskipNativeBuild=tru
 | `native/markup-rs` | Rust Markdown, syntax highlighting, and math parsing |
 | `native/mtproto`, `native/markup` | Kotlin facades, generated bindings, and native libraries |
 | `native/vpx` | Prebuilt VP9 decoder for video stickers |
+| `desktop` | Native Fedora application, Cargo tests, and Fluent localizations |
+| `packaging/fedora` | Desktop/AppStream metadata, icon, RPM spec, and offline source preparation |
 | `vendor` | Third-party source and submodules |
 
-Features call `network/bridge`; native protocol logic lives in Rust. Features must not import generated UniFFI types or depend on other feature modules. See [AGENTS.md](AGENTS.md) for development conventions and protocol invariants.
+Android features call `network/bridge`; native protocol logic lives in Rust. Features must not import generated UniFFI types or depend on other feature modules. Desktop calls mono-rs directly and does not use the Kotlin bridge. See [AGENTS.md](AGENTS.md) for development conventions and protocol invariants.
 
 ## Contributing
 

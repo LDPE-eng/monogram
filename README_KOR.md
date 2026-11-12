@@ -135,10 +135,69 @@ Windows (PowerShell):
 
 Windows에서는 `./gradlew` 대신 `./gradlew.bat`를 사용하세요. `-PskipNativeBuild=true`는 호환되는 네이티브 라이브러리와 생성된 바인딩이 이미 있는 상태에서 Kotlin만 변경할 때 사용하세요. 네이티브 컴파일과 바인딩 재생성을 모두 건너뛰지만 SDK/NDK 설정은 여전히 필요합니다.
 
+## Fedora 네이티브 데스크톱(개발 중)
+
+`desktop/`은 Fedora 44용 Rust, Relm4, GTK4, libadwaita로 만든 독립 네이티브 애플리케이션입니다. 고정된 mono-rs 소스, 공유 Rust 마크업 크레이트, tlottie를 직접 사용하며 JVM, Android SDK/NDK, Gradle, Kotlin 브리지가 필요 없습니다. 단일 계정 저장소를 사용하는 개발 버전이며, 완전한 Android 대체품이나 검증된 Fedora 릴리스가 아닙니다.
+
+이 모듈은 API 설정과 기존 계정 인증(전화/코드, 2FA, QR, 클라이언트 계층 passkey), 캐시 및 실시간 채팅/기록, folders, 검색, 프로필, 텍스트/미디어/특수 메시지, 임시 저장, 예약 전송, 답글/주제, 반응, 투표, 체크리스트, 인라인 봇, 다운로드/업로드, 캐시/네트워크 정책, GStreamer 재생, 스티커, MPRIS, 알림, 프록시와 기기 세션, 모양과 현지화 설정, 진단, TDLib 인증 가져오기, PackageKit 업데이트 확인을 구현합니다. 자세한 기능 목록과 플랫폼 동작은 [desktop/README.md](desktop/README.md)를 참고하세요.
+
+중요한 제한도 남아 있습니다. 새 계정 등록과 다중 계정은 지원하지 않으며, passkey는 대화형 PIN 입력 없이 CTAP2 USB HID만 사용합니다. VP9 알파 WebM 스티커는 정적 썸네일로 표시되고, 코덱은 설치된 GStreamer 플러그인에 따라 달라집니다. 초대/공유 딥 링크와 알림 인라인 답장은 지원하지 않고, TDLib 가져오기는 인증만 전송합니다. PackageKit은 시스템 저장소를 확인하고 GNOME Software를 열 뿐 앱을 직접 업데이트하지 않습니다. 오프라인 테스트는 실제 Telegram, GUI 작업 흐름, 하드웨어 인증 장치, 시스템 서비스 또는 설치된 RPM을 검증하지 않습니다.
+
+### Fedora 의존성, 검사 및 빌드
+
+다음 빌드 도구와 라이브러리는 컴퓨터 소유자의 동의를 받은 후에만 설치하세요. Rust는 `desktop/Cargo.toml`의 요구 사항(현재 1.99 이상)을 충족해야 합니다. rustup 설정과 런타임 서비스는 [desktop/README.md](desktop/README.md)를 참고하세요.
+
+```sh
+sudo dnf install git curl ca-certificates tar gzip findutils util-linux \
+  gcc gcc-c++ make cmake pkgconf-pkg-config python3 \
+  gtk4-devel libadwaita-devel libsecret-devel sqlite-devel \
+  gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good \
+  systemd-devel rpm-build redhat-rpm-config desktop-file-utils appstream \
+  /usr/bin/kwin_wayland /usr/bin/dbus-run-session
+
+git submodule update --init --recursive
+cd desktop
+cargo fmt --package monogram-desktop -- --check
+cargo check --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+bash ../packaging/fedora/run-headless-tests.sh \
+  cargo test --workspace --all-targets --locked
+python3 tools/test_localization.py
+cargo build --release --locked
+cd ..
+desktop-file-validate packaging/fedora/io.github.monogram.desktop.desktop
+appstreamcli validate --no-net --strict \
+  packaging/fedora/io.github.monogram.desktop.metainfo.xml
+```
+
+로컬 애플리케이션은 `./desktop/target/release/monogram-desktop`으로 실행합니다. GUI 검사에는 일회용 XDG 디렉터리와 격리된 D-Bus/Secret Service 세션을 사용하고, 테스트 모음에 실제 계정을 사용하지 마세요.
+
+### 데스크톱 API 자격 증명
+
+[my.telegram.org/apps](https://my.telegram.org/apps)에서 직접 자격 증명을 발급받으세요. 일반 설정 UI는 API ID/API hash와 세션 암호화 키를 Secret Service(GNOME Keyring 또는 호환 KWallet)에 저장하며 일반 텍스트 대체 저장소는 사용하지 않습니다. 제어된 개발 환경에서는 `SECRETS`가 `API_ID=...`와 `API_HASH=...`를 포함한 `0600` 권한 파일을 가리키게 할 수 있습니다. 인라인 내용도 지원하지만 권장하지 않습니다. 이 오버라이드는 저장된 API 자격 증명보다 우선하며 Secret Service로 가져오지 않고, 세션 키에는 여전히 Secret Service가 필요합니다. 실제 자격 증명을 소스, 명령, 로그, 이슈, CI 또는 RPM 메타데이터에 넣지 마세요.
+
+### 로컬 RPM 빌드
+
+저장소 루트에서 rustup의 Cargo가 `PATH`에 있는 상태로 실행하세요.
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+rpm_topdir=$(mktemp -d "${TMPDIR:-/tmp}/monogram-rpmbuild.XXXXXXXX")
+bash packaging/fedora/prepare-sources.sh "$rpm_topdir"
+rpmbuild -ba --without system_rust \
+  --define "_topdir $rpm_topdir" --define '_smp_build_ncpus 2' \
+  "$rpm_topdir/SPECS/monogram-desktop.spec"
+rpm -qpl "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+rpm -qp --requires "$rpm_topdir"/RPMS/*/monogram-desktop-*.rpm
+```
+
+준비 단계에서 잠긴 Cargo 의존성을 벤더링하며, RPM 빌드/검사 단계는 이를 오프라인으로 사용합니다. 이 명령은 패키지를 설치하거나 Telegram에 연결하지 않습니다. 바이너리 RPM과 SRPM은 `$rpm_topdir`에 남으며, 공식 Fedora 저장소 패키지가 아닌 로컬 패키징입니다. 설치, 재현성, GUI 및 실제 로그인은 릴리스를 주장하기 전에 별도로 검증해야 합니다.
+
 ## 기술 스택
 
 - **언어 및 프로토콜:** Kotlin, Rust, MTProto, UniFFI
-- **UI 및 상태:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **Android UI 및 상태:** Jetpack Compose, Material 3, Decompose, MVIKotlin
+- **데스크톱:** Rust, Relm4, GTK4, libadwaita, SQLite, Secret Service, GStreamer, MPRIS
 - **공통 서비스:** Koin, Coroutines, Flow, Room
 - **미디어 및 푸시:** Media3, Coil, libvpx, tlottie, Firebase Cloud Messaging, UnifiedPush
 
@@ -155,9 +214,11 @@ Windows에서는 `./gradlew` 대신 `./gradlew.bat`를 사용하세요. `-PskipN
 | `native/markup-rs` | Rust 기반 Markdown 처리, 구문 강조 및 수식 파싱 |
 | `native/mtproto`, `native/markup` | Kotlin 파사드, 생성된 바인딩 및 네이티브 라이브러리 |
 | `native/vpx` | 비디오 스티커용 사전 빌드 VP9 디코더 |
+| `desktop` | Fedora 네이티브 애플리케이션, Cargo 테스트 및 Fluent 현지화 |
+| `packaging/fedora` | Desktop/AppStream 메타데이터, 아이콘, RPM spec 및 오프라인 소스 준비 |
 | `vendor` | 외부 소스 코드 및 서브모듈 |
 
-feature 모듈은 `network/bridge`를 호출하며, 네이티브 프로토콜 로직은 Rust에 있습니다. feature 모듈은 생성된 UniFFI 타입을 직접 가져오거나 다른 feature 모듈에 의존하면 안 됩니다. 개발 규칙과 프로토콜 불변 조건은 [AGENTS.md](AGENTS.md)를 참고하세요.
+Android feature 모듈은 `network/bridge`를 호출하며, 네이티브 프로토콜 로직은 Rust에 있습니다. feature 모듈은 생성된 UniFFI 타입을 직접 가져오거나 다른 feature 모듈에 의존하면 안 됩니다. 데스크톱은 mono-rs를 직접 호출하며 Kotlin 브리지를 사용하지 않습니다. 개발 규칙과 프로토콜 불변 조건은 [AGENTS.md](AGENTS.md)를 참고하세요.
 
 ## 기여하기
 
